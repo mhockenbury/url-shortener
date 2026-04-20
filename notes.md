@@ -9,6 +9,7 @@ Subproject-local notes: decisions made during implementation, commands, referenc
 - **API + worker run on host** during dev; compose runs Postgres + Redis + ClickHouse. Dockerizing API/worker is deferred until benchmarking phase to avoid container overhead noise in measurements
 - **Redirect status code:** deferring 301 vs 302 decision to when analytics are wired — see `docs/tradeoffs.md`
 - **Analytics store:** ClickHouse, raw events, no aggregation at write time. Chosen over Postgres-aggregates for correctness-of-shape and the educational value of exercising a real columnar store — see README §6
+- **Go version bumped 1.22 → 1.25** when adding `pgx/v5 v5.9.2` (pgx latest requires 1.25). Go's transparent toolchain management downloaded 1.25 automatically. System install is still 1.22.5; the `go` tool will fetch 1.25 on demand for this module. Fine for the lab; worth noting if we ever share the repo and downstream users need to match.
 
 ## Open questions (subproject-local)
 
