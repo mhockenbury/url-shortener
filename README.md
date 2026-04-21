@@ -21,7 +21,7 @@
 ### Non-functional
 - **Read-heavy:** 10:1 read:write ratio (redirects >> creations)
 - **Redirect latency:** p99 < 50ms for cache hits, < 150ms for cache misses
-- **Availability:** single-region, best-effort; no HA story for the lab
+- **Availability:** single-region, best-effort; no HA story for the lab. *If this were production:* 99.9% monthly on the redirect path; best-effort on creation and stats.
 - **Durability:** links and their mappings must not be lost; analytics counts are best-effort (async, at-least-once, eventual)
 - **Consistency:** new short codes immediately readable (read-your-writes); analytics counts lag by seconds, not hours
 

@@ -6,7 +6,12 @@ The four core decisions live in the README §6. This doc is where we capture add
 
 - Redirect response: 301 (permanent) vs 302 (temporary). 301 is browser-cached aggressively — good for performance, bad for analytics accuracy. Likely going with 302 to keep per-click observability, but worth benchmarking.
 - Redis cache key format: raw `short_code` vs prefixed (`url:{code}`). Prefix enables multi-tenant reuse of the same Redis later.
-- URL validation strictness: parse + scheme check only, or also DNS resolution / length caps / SSRF-adjacent block rules? Starting permissive.
+- **URL validation strictness.** `POST /shorten` needs input validation beyond "is it a parseable URL." Plan for the initial handler:
+  - *Must:* scheme is `http` or `https` only (reject `javascript:`, `data:`, `file:`, `ftp:`, etc. — closes the open-redirect-to-XSS vector)
+  - *Must:* length cap (~2048 chars matching §1 requirements)
+  - *Should:* reject hosts that resolve to RFC1918 / loopback / link-local / multicast (SSRF guard — without this, someone can shorten `http://localhost:6379/` or `http://169.254.169.254/` and weaponize the redirect)
+  - *Skip for the lab:* Safe Browsing API lookups, blocklists, CAPTCHA, user quotas, takedown workflows. These are real production concerns but out of scope here.
+  Implement as a `ValidateTarget(rawURL) error` helper in the HTTP package so the rules are in one place and unit-testable without a network round trip (mock the resolver or skip DNS in tests).
 - Connection pool sizing (pgx, redis, clickhouse): initial guesses, refined after first benchmark pass.
 - Goose vs plain psql for migrations: plain `.sql` + a `make migrate` wrapper is enough for the lab; goose only if we need down-migrations.
 - ClickHouse insert batch size: 1000 rows / 1s is the starting heuristic. ClickHouse prefers larger batches (10k+) for best compression and merge behavior — revisit after first benchmark pass. Trade-off is batch size vs end-to-end analytics latency.
