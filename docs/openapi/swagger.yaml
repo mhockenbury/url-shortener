@@ -1,0 +1,189 @@
+basePath: /
+definitions:
+  http.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  http.healthResponse:
+    properties:
+      postgres:
+        type: string
+      redis:
+        type: string
+      status:
+        type: string
+    type: object
+  http.shortenRequest:
+    properties:
+      alias:
+        type: string
+      expires_at:
+        type: string
+      url:
+        type: string
+    type: object
+  http.shortenResponse:
+    properties:
+      expires_at:
+        type: string
+      long_url:
+        type: string
+      short_code:
+        type: string
+      short_url:
+        type: string
+    type: object
+  http.statsResponse:
+    properties:
+      hourly:
+        items:
+          $ref: '#/definitions/shortener.HourlyBucket'
+        type: array
+      short_code:
+        type: string
+      since:
+        type: string
+      total:
+        type: integer
+      until:
+        type: string
+    type: object
+  shortener.HourlyBucket:
+    properties:
+      count:
+        type: integer
+      hour:
+        type: string
+    type: object
+info:
+  contact:
+    name: matt hockenbury
+    url: https://github.com/mhockenbury/url-shortener
+  description: bit.ly-style URL shortener — first subproject in sysdesign-lab. See
+    docs/ for full architecture + tradeoffs.
+  title: url-shortener API
+  version: "0.1"
+paths:
+  /{code}:
+    get:
+      description: Looks up the code (cache then DB), emits a click event on the side,
+        and returns a 302. Expired links return 410.
+      parameters:
+      - description: base62 short code
+        in: path
+        name: code
+        required: true
+        type: string
+      responses:
+        "302":
+          description: Location header set to long URL
+          schema:
+            type: string
+        "400":
+          description: invalid code
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "404":
+          description: not found
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "410":
+          description: expired
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "500":
+          description: internal error
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      summary: Redirect a short code to its long URL
+      tags:
+      - links
+  /healthz:
+    get:
+      description: Pings Postgres and Redis (ClickHouse not yet included). Returns
+        200 when both respond, 503 otherwise.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/http.healthResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/http.healthResponse'
+      summary: Health check
+      tags:
+      - ops
+  /shorten:
+    post:
+      consumes:
+      - application/json
+      description: Validates the URL (scheme, length, SSRF guard) and returns a short
+        code. Supply `alias` to request a specific code; `expires_at` for a TTL.
+      parameters:
+      - description: Shorten request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/http.shortenRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/http.shortenResponse'
+        "400":
+          description: invalid URL, scheme, alias, or expiry
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "409":
+          description: alias already taken
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "500":
+          description: internal error
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      summary: Create a short code for a long URL
+      tags:
+      - links
+  /stats/{code}:
+    get:
+      description: Returns total clicks and per-hour buckets over the last 7 days.
+        Unknown codes return zeros (no Postgres lookup).
+      parameters:
+      - description: base62 short code
+        in: path
+        name: code
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/http.statsResponse'
+        "400":
+          description: invalid code
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "500":
+          description: internal error
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "503":
+          description: stats backend unavailable
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      summary: Click analytics for a short code
+      tags:
+      - links
+schemes:
+- http
+swagger: "2.0"

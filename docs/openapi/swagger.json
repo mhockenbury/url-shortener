@@ -1,0 +1,282 @@
+{
+    "schemes": [
+        "http"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "bit.ly-style URL shortener — first subproject in sysdesign-lab. See docs/ for full architecture + tradeoffs.",
+        "title": "url-shortener API",
+        "contact": {
+            "name": "matt hockenbury",
+            "url": "https://github.com/mhockenbury/url-shortener"
+        },
+        "version": "0.1"
+    },
+    "basePath": "/",
+    "paths": {
+        "/healthz": {
+            "get": {
+                "description": "Pings Postgres and Redis (ClickHouse not yet included). Returns 200 when both respond, 503 otherwise.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/http.healthResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/http.healthResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/shorten": {
+            "post": {
+                "description": "Validates the URL (scheme, length, SSRF guard) and returns a short code. Supply `alias` to request a specific code; `expires_at` for a TTL.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "links"
+                ],
+                "summary": "Create a short code for a long URL",
+                "parameters": [
+                    {
+                        "description": "Shorten request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.shortenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/http.shortenResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid URL, scheme, alias, or expiry",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "alias already taken",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/stats/{code}": {
+            "get": {
+                "description": "Returns total clicks and per-hour buckets over the last 7 days. Unknown codes return zeros (no Postgres lookup).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "links"
+                ],
+                "summary": "Click analytics for a short code",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "base62 short code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/http.statsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid code",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "stats backend unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/{code}": {
+            "get": {
+                "description": "Looks up the code (cache then DB), emits a click event on the side, and returns a 302. Expired links return 410.",
+                "tags": [
+                    "links"
+                ],
+                "summary": "Redirect a short code to its long URL",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "base62 short code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "302": {
+                        "description": "Location header set to long URL",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid code",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "expired",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "$ref": "#/definitions/http.errorResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "http.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "http.healthResponse": {
+            "type": "object",
+            "properties": {
+                "postgres": {
+                    "type": "string"
+                },
+                "redis": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "http.shortenRequest": {
+            "type": "object",
+            "properties": {
+                "alias": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "http.shortenResponse": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "long_url": {
+                    "type": "string"
+                },
+                "short_code": {
+                    "type": "string"
+                },
+                "short_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "http.statsResponse": {
+            "type": "object",
+            "properties": {
+                "hourly": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/shortener.HourlyBucket"
+                    }
+                },
+                "short_code": {
+                    "type": "string"
+                },
+                "since": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "until": {
+                    "type": "string"
+                }
+            }
+        },
+        "shortener.HourlyBucket": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "hour": {
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

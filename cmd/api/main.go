@@ -3,6 +3,14 @@
 // Config is read from env vars; see config() for defaults. The binary
 // opens a Postgres pool, a Redis client, wires the LinkService, and
 // serves the HTTP router until SIGINT/SIGTERM, then shuts down gracefully.
+//
+//	@title						url-shortener API
+//	@version					0.1
+//	@description				bit.ly-style URL shortener — first subproject in sysdesign-lab. See docs/ for full architecture + tradeoffs.
+//	@BasePath					/
+//	@schemes					http
+//	@contact.name				matt hockenbury
+//	@contact.url				https://github.com/mhockenbury/url-shortener
 package main
 
 import (

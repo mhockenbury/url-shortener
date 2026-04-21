@@ -72,6 +72,18 @@ type shortenResponse struct {
 }
 
 // Shorten handles POST /shorten.
+//
+//	@Summary		Create a short code for a long URL
+//	@Description	Validates the URL (scheme, length, SSRF guard) and returns a short code. Supply `alias` to request a specific code; `expires_at` for a TTL.
+//	@Tags			links
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		shortenRequest	true	"Shorten request"
+//	@Success		201		{object}	shortenResponse
+//	@Failure		400		{object}	errorResponse	"invalid URL, scheme, alias, or expiry"
+//	@Failure		409		{object}	errorResponse	"alias already taken"
+//	@Failure		500		{object}	errorResponse	"internal error"
+//	@Router			/shorten [post]
 func (h *Handlers) Shorten(w http.ResponseWriter, r *http.Request) {
 	var req shortenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -120,6 +132,17 @@ func (h *Handlers) Shorten(w http.ResponseWriter, r *http.Request) {
 // Redirect handles GET /{code}.
 // Uses 302 (Found) rather than 301 so browsers re-hit the service on each
 // click and analytics stays accurate. See docs/tradeoffs.md.
+//
+//	@Summary		Redirect a short code to its long URL
+//	@Description	Looks up the code (cache then DB), emits a click event on the side, and returns a 302. Expired links return 410.
+//	@Tags			links
+//	@Param			code	path		string	true	"base62 short code"
+//	@Success		302		{string}	string	"Location header set to long URL"
+//	@Failure		400		{object}	errorResponse	"invalid code"
+//	@Failure		404		{object}	errorResponse	"not found"
+//	@Failure		410		{object}	errorResponse	"expired"
+//	@Failure		500		{object}	errorResponse	"internal error"
+//	@Router			/{code} [get]
 func (h *Handlers) Redirect(w http.ResponseWriter, r *http.Request) {
 	code := chi.URLParam(r, "code")
 	if !shortener.IsValidCode(code) {
@@ -173,6 +196,17 @@ type statsResponse struct {
 // buckets over the last StatsWindow. Assumes the code exists without
 // verifying against Postgres — an unknown code simply returns zeros,
 // which is cheap and avoids a second DB round-trip on every stats call.
+//
+//	@Summary		Click analytics for a short code
+//	@Description	Returns total clicks and per-hour buckets over the last 7 days. Unknown codes return zeros (no Postgres lookup).
+//	@Tags			links
+//	@Produce		json
+//	@Param			code	path		string	true	"base62 short code"
+//	@Success		200		{object}	statsResponse
+//	@Failure		400		{object}	errorResponse	"invalid code"
+//	@Failure		503		{object}	errorResponse	"stats backend unavailable"
+//	@Failure		500		{object}	errorResponse	"internal error"
+//	@Router			/stats/{code} [get]
 func (h *Handlers) Stats(w http.ResponseWriter, r *http.Request) {
 	code := chi.URLParam(r, "code")
 	if !shortener.IsValidCode(code) {
@@ -213,6 +247,14 @@ type healthResponse struct {
 
 // Health pings each configured dependency and returns 200 if all are up,
 // 503 if any are down. Handy for readiness probes.
+//
+//	@Summary		Health check
+//	@Description	Pings Postgres and Redis (ClickHouse not yet included). Returns 200 when both respond, 503 otherwise.
+//	@Tags			ops
+//	@Produce		json
+//	@Success		200	{object}	healthResponse
+//	@Failure		503	{object}	healthResponse
+//	@Router			/healthz [get]
 func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	resp := healthResponse{Status: "ok"}
 	code := http.StatusOK
