@@ -5,7 +5,7 @@ Subproject-local notes: decisions made during implementation, commands, referenc
 ## Decisions made during scaffolding
 
 - **Go module path:** `github.com/mhockenbury/url-shortener`
-- **Migrations:** plain `.sql` files for now; `make migrate` not yet wired. Postgres migrations in `migrations/`, ClickHouse in `migrations/clickhouse/`. Will reach for goose only if we need down-migrations
+- **Migrations:** plain `.sql` files applied via `make migrate` (idempotent — migrations use `IF NOT EXISTS` / `ON CONFLICT DO NOTHING`). Postgres migrations in `migrations/`, ClickHouse in `migrations/clickhouse/`. Make target uses `ON_ERROR_STOP=1` for Postgres and `|| exit 1` so a broken migration halts the chain. Will reach for goose only if we need versioning or down-migrations
 - **API + worker run on host** during dev; compose runs Postgres + Redis + ClickHouse. Dockerizing API/worker is deferred until benchmarking phase to avoid container overhead noise in measurements
 - **Redirect status code:** chose 302 so browsers re-hit on each click (keeps analytics accurate). Revisit with real browser-cache benchmarks if ever needed.
 - **Analytics store:** ClickHouse, raw events, no aggregation at write time. Chosen over Postgres-aggregates for correctness-of-shape and the educational value of exercising a real columnar store — see README §6
@@ -25,7 +25,7 @@ Subproject-local notes: decisions made during implementation, commands, referenc
 
 ## Open questions (subproject-local)
 
-- Goose vs plain psql runner for migrations
+- Goose vs plain psql for migrations — currently plain psql/clickhouse-client via `make migrate`; revisit only if we need down-migrations or versioning
 - k6 vs vegeta for load tests
 - Should `POST /shorten` be idempotent (same URL → same code) or always mint a new one? Currently "always new" because counter strategy makes idempotence expensive (would need a separate `long_url → short_code` lookup table). Not blocking.
 - When to introduce structured error types beyond the typed sentinels (e.g., wrapping context into a `*AppError` for handler-side mapping). Currently handlers use `errors.Is` + switch — fine at this size.
@@ -37,9 +37,10 @@ Subproject-local notes: decisions made during implementation, commands, referenc
 # Bring up dependencies
 docker compose up -d postgres redis clickhouse
 
-# Apply migrations (one-time per env, manual for now)
-docker compose exec -T postgres psql -U shortener -d shortener < migrations/0001_init.sql
-docker compose exec -T clickhouse clickhouse-client --user shortener --password shortener --database shortener < migrations/clickhouse/0001_init.sql
+# Apply migrations (idempotent; safe to re-run)
+make migrate              # both stores
+make migrate-postgres     # just Postgres
+make migrate-clickhouse   # just ClickHouse
 
 # Run the API (compiled binary — needed for graceful shutdown to work)
 go build -o bin/api ./cmd/api && ./bin/api
