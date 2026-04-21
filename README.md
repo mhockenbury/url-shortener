@@ -4,8 +4,8 @@
 
 **Language/stack:** Go 1.22 (stdlib net/http + chi, pgx, go-redis, clickhouse-go, zerolog), Postgres 16, Redis 7, ClickHouse
 **Category:** interview-classic
-**Status:** planning
-**Repo:** local only (private GitHub repo pending)
+**Status:** building — redirect path working end-to-end; analytics pipeline pending
+**Repo:** https://github.com/mhockenbury/url-shortener (public; matt pushes manually)
 
 ---
 
