@@ -15,10 +15,11 @@ import (
 
 // Service is the narrow surface handlers need from the link service.
 // Defined here so handler tests can substitute a fake without pulling in
-// pgx / redis. The real implementation is *shortener.LinkService.
+// pgx / redis / clickhouse. The real implementation is *shortener.LinkService.
 type Service interface {
 	Create(ctx context.Context, in shortener.CreateInput) (shortener.CreateResult, error)
 	Lookup(ctx context.Context, shortCode string) (shortener.LookupResult, error)
+	Stats(ctx context.Context, shortCode string, since, until time.Time) (shortener.StatsResult, error)
 	PublishClick(ctx context.Context, shortCode, referrer, userAgent string) error
 }
 
@@ -156,10 +157,50 @@ func (h *Handlers) Redirect(w http.ResponseWriter, r *http.Request) {
 
 // ---- GET /stats/{code} ----
 
-// Stats is a placeholder. ClickHouse adapter not built yet; returns 501 so
-// the endpoint is registered, documented, and clearly incomplete.
+// StatsWindow is how far back Stats queries. Matches the plan in
+// docs/architecture.md — last 7 days of hourly buckets.
+const StatsWindow = 7 * 24 * time.Hour
+
+type statsResponse struct {
+	ShortCode string                    `json:"short_code"`
+	Total     uint64                    `json:"total"`
+	Since     time.Time                 `json:"since"`
+	Until     time.Time                 `json:"until"`
+	Hourly    []shortener.HourlyBucket  `json:"hourly"`
+}
+
+// Stats handles GET /stats/{code}. Returns total clicks and per-hour
+// buckets over the last StatsWindow. Assumes the code exists without
+// verifying against Postgres — an unknown code simply returns zeros,
+// which is cheap and avoids a second DB round-trip on every stats call.
 func (h *Handlers) Stats(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "stats endpoint pending ClickHouse adapter")
+	code := chi.URLParam(r, "code")
+	if !shortener.IsValidCode(code) {
+		writeError(w, http.StatusBadRequest, "invalid code")
+		return
+	}
+
+	until := time.Now().UTC()
+	since := until.Add(-StatsWindow)
+
+	res, err := h.svc.Stats(r.Context(), code, since, until)
+	if err != nil {
+		if errors.Is(err, shortener.ErrStatsUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "stats backend unavailable")
+			return
+		}
+		slog.ErrorContext(r.Context(), "stats query", "code", code, "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, statsResponse{
+		ShortCode: code,
+		Total:     res.Total,
+		Since:     since,
+		Until:     until,
+		Hourly:    res.Hourly,
+	})
 }
 
 // ---- GET /healthz ----

@@ -23,6 +23,7 @@ import (
 
 	myhttp "github.com/mhockenbury/url-shortener/internal/http"
 	"github.com/mhockenbury/url-shortener/internal/shortener"
+	ch "github.com/mhockenbury/url-shortener/internal/storage/clickhouse"
 	pg "github.com/mhockenbury/url-shortener/internal/storage/postgres"
 	cacheredis "github.com/mhockenbury/url-shortener/internal/storage/redis"
 )
@@ -30,6 +31,10 @@ import (
 type appConfig struct {
 	databaseURL    string
 	redisAddr      string
+	chAddr         string
+	chDatabase     string
+	chUsername     string
+	chPassword     string
 	httpAddr       string
 	baseURL        string
 	allocName      string
@@ -83,6 +88,21 @@ func run() error {
 	pingCancel()
 	slog.Info("redis connected", "addr", cfg.redisAddr)
 
+	// ClickHouse client (used by the stats endpoint; worker owns its own).
+	chConnectCtx, chCancel := context.WithTimeout(ctx, 5*time.Second)
+	chClient, err := ch.NewClient(chConnectCtx, ch.Config{
+		Addr:     cfg.chAddr,
+		Database: cfg.chDatabase,
+		Username: cfg.chUsername,
+		Password: cfg.chPassword,
+	})
+	chCancel()
+	if err != nil {
+		return fmt.Errorf("clickhouse connect: %w", err)
+	}
+	defer chClient.Close()
+	slog.Info("clickhouse connected", "addr", cfg.chAddr)
+
 	// Domain + storage wiring.
 	alloc, err := shortener.NewAllocator(pool, cfg.allocName, cfg.idBatchSize)
 	if err != nil {
@@ -90,7 +110,7 @@ func run() error {
 	}
 	links := pg.NewLinkStore(pool)
 	cache := cacheredis.NewClient(rdb)
-	svc := shortener.NewLinkService(alloc, links, cache, nil, cfg.cacheTTL)
+	svc := shortener.NewLinkService(alloc, links, cache, chClient, nil, cfg.cacheTTL)
 
 	// HTTP layer.
 	handlers := myhttp.NewHandlers(
@@ -140,6 +160,10 @@ func loadConfig() appConfig {
 	return appConfig{
 		databaseURL:   envOr("DATABASE_URL", "postgres://shortener:shortener@localhost:5432/shortener"),
 		redisAddr:     envOr("REDIS_ADDR", "localhost:6379"),
+		chAddr:        envOr("CLICKHOUSE_ADDR", "localhost:9000"),
+		chDatabase:    envOr("CLICKHOUSE_DATABASE", "shortener"),
+		chUsername:    envOr("CLICKHOUSE_USERNAME", "shortener"),
+		chPassword:    envOr("CLICKHOUSE_PASSWORD", "shortener"),
 		httpAddr:      envOr("HTTP_ADDR", ":8080"),
 		baseURL:       envOr("BASE_URL", "http://localhost:8080"),
 		allocName:     envOr("ID_ALLOCATOR_NAME", "links"),

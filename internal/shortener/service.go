@@ -8,15 +8,17 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	ch "github.com/mhockenbury/url-shortener/internal/storage/clickhouse"
 	pg "github.com/mhockenbury/url-shortener/internal/storage/postgres"
 	cacheredis "github.com/mhockenbury/url-shortener/internal/storage/redis"
 )
 
 // Sentinel errors surfaced to handlers. Handlers map these to HTTP status codes.
 var (
-	ErrNotFound   = errors.New("link not found")
-	ErrExpired    = errors.New("link expired")
-	ErrAliasTaken = errors.New("alias already taken")
+	ErrNotFound          = errors.New("link not found")
+	ErrExpired           = errors.New("link expired")
+	ErrAliasTaken        = errors.New("alias already taken")
+	ErrStatsUnavailable  = errors.New("stats backend not configured")
 )
 
 // DefaultCacheTTL is how long cached short_code -> long_url entries live in
@@ -36,29 +38,33 @@ func (wallClock) Now() time.Time { return time.Now().UTC() }
 // DefaultClock is the production clock.
 var DefaultClock Clock = wallClock{}
 
-// LinkService orchestrates link create/lookup across allocator, Postgres,
-// Redis cache, and the clicks event stream. Handlers depend on this type;
-// this type depends on the storage adapters.
+// LinkService orchestrates link create/lookup/stats across allocator,
+// Postgres, Redis cache, clicks event stream, and ClickHouse analytics.
+// Handlers depend on this type; this type depends on the storage adapters.
 //
 // Singleflight collapses concurrent cache misses on the same short_code to
 // a single Postgres query — the "thundering herd" mitigation documented in
 // docs/tradeoffs.md.
 type LinkService struct {
-	alloc    *Allocator
-	links    *pg.LinkStore
-	redis    *cacheredis.Client
-	clock    Clock
-	cacheTTL time.Duration
-	sf       singleflight.Group
+	alloc      *Allocator
+	links      *pg.LinkStore
+	redis      *cacheredis.Client
+	clickhouse *ch.Client
+	clock      Clock
+	cacheTTL   time.Duration
+	sf         singleflight.Group
 }
 
 // NewLinkService wires the service. `redis` may be nil for tests that want
 // to exercise the DB path only; if nil, cache ops are skipped silently.
-// `clock` may be nil, defaulting to DefaultClock.
+// `clickhouse` may be nil if stats queries aren't wanted — Stats will
+// return ErrStatsUnavailable in that case. `clock` may be nil, defaulting
+// to DefaultClock.
 func NewLinkService(
 	alloc *Allocator,
 	links *pg.LinkStore,
 	redis *cacheredis.Client,
+	clickhouse *ch.Client,
 	clock Clock,
 	cacheTTL time.Duration,
 ) *LinkService {
@@ -69,11 +75,12 @@ func NewLinkService(
 		cacheTTL = DefaultCacheTTL
 	}
 	return &LinkService{
-		alloc:    alloc,
-		links:    links,
-		redis:    redis,
-		clock:    clock,
-		cacheTTL: cacheTTL,
+		alloc:      alloc,
+		links:      links,
+		redis:      redis,
+		clickhouse: clickhouse,
+		clock:      clock,
+		cacheTTL:   cacheTTL,
 	}
 }
 
@@ -208,6 +215,41 @@ func (s *LinkService) dbLookup(ctx context.Context, shortCode string) (LookupRes
 		ExpiresAt: link.ExpiresAt,
 		FromCache: false,
 	}, nil
+}
+
+// StatsResult is the service-level view of analytics. Mirrors the adapter
+// shape so the handler doesn't need to import the storage package.
+type StatsResult struct {
+	Total  uint64         `json:"total"`
+	Hourly []HourlyBucket `json:"hourly"`
+}
+
+// HourlyBucket is one row of the stats response — count of clicks in a
+// given hour. Returned in chronological order.
+type HourlyBucket struct {
+	Hour  time.Time `json:"hour"`
+	Count uint64    `json:"count"`
+}
+
+// Stats returns click analytics for shortCode over [since, until).
+// Returns ErrStatsUnavailable if the ClickHouse client isn't configured.
+// The handler chooses the time window; the service does not impose one.
+func (s *LinkService) Stats(ctx context.Context, shortCode string, since, until time.Time) (StatsResult, error) {
+	if s.clickhouse == nil {
+		return StatsResult{}, ErrStatsUnavailable
+	}
+	chRes, err := s.clickhouse.Stats(ctx, shortCode, since, until)
+	if err != nil {
+		return StatsResult{}, fmt.Errorf("stats: %w", err)
+	}
+	out := StatsResult{
+		Total:  chRes.Total,
+		Hourly: make([]HourlyBucket, len(chRes.Hourly)),
+	}
+	for i, b := range chRes.Hourly {
+		out.Hourly[i] = HourlyBucket{Hour: b.Hour, Count: b.Count}
+	}
+	return out, nil
 }
 
 // PublishClick emits a click event best-effort. Errors are returned for

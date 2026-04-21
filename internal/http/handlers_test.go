@@ -17,6 +17,7 @@ import (
 
 	myhttp "github.com/mhockenbury/url-shortener/internal/http"
 	"github.com/mhockenbury/url-shortener/internal/shortener"
+	ch "github.com/mhockenbury/url-shortener/internal/storage/clickhouse"
 	pg "github.com/mhockenbury/url-shortener/internal/storage/postgres"
 	cacheredis "github.com/mhockenbury/url-shortener/internal/storage/redis"
 )
@@ -28,16 +29,18 @@ import (
 const (
 	defaultPGDSN     = "postgres://shortener:shortener@localhost:5432/shortener"
 	defaultRedisAddr = "localhost:6379"
+	defaultCHAddr    = "localhost:9000"
 )
 
 type testEnv struct {
-	pool  *pgxpool.Pool
-	rdb   *goredis.Client
-	svc   *shortener.LinkService
-	h     *myhttp.Handlers
-	alloc *shortener.Allocator
-	links *pg.LinkStore
-	cache *cacheredis.Client
+	pool   *pgxpool.Pool
+	rdb    *goredis.Client
+	ch     *ch.Client
+	svc    *shortener.LinkService
+	h      *myhttp.Handlers
+	alloc  *shortener.Allocator
+	links  *pg.LinkStore
+	cache  *cacheredis.Client
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -70,6 +73,22 @@ func newTestEnv(t *testing.T) *testEnv {
 		t.Skipf("redis unreachable (addr=%s): %v", addr, err)
 	}
 
+	chAddr := os.Getenv("CLICKHOUSE_ADDR")
+	if chAddr == "" {
+		chAddr = defaultCHAddr
+	}
+	chClient, err := ch.NewClient(ctx, ch.Config{
+		Addr:     chAddr,
+		Database: "shortener",
+		Username: "shortener",
+		Password: "shortener",
+	})
+	if err != nil {
+		_ = rdb.Close()
+		pool.Close()
+		t.Skipf("clickhouse unreachable (addr=%s): %v", chAddr, err)
+	}
+
 	// Per-test allocator name AND per-test starting id. The id must not
 	// collide with rows left behind by earlier test runs on the shared
 	// `links` table, so we seed next_id from the nanosecond clock.
@@ -88,7 +107,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 	links := pg.NewLinkStore(pool)
 	cache := cacheredis.NewClient(rdb)
-	svc := shortener.NewLinkService(alloc, links, cache, nil, 10*time.Second)
+	svc := shortener.NewLinkService(alloc, links, cache, chClient, nil, 10*time.Second)
 
 	// A resolver that accepts our test hosts as public addresses; real DNS
 	// would be too slow and flaky for tests.
@@ -106,6 +125,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(),
 			`DELETE FROM id_allocator WHERE name=$1`, allocName)
+		_ = chClient.Close()
 		_ = rdb.Close()
 		pool.Close()
 	})
@@ -113,6 +133,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	return &testEnv{
 		pool:  pool,
 		rdb:   rdb,
+		ch:    chClient,
 		svc:   svc,
 		h:     h,
 		alloc: alloc,
@@ -338,16 +359,89 @@ func TestHealth_AllUpReturns200(t *testing.T) {
 
 // --- GET /stats/{code} ---
 
-func TestStats_ReturnsNotImplemented(t *testing.T) {
+func TestStats_ReturnsTotalAndHourly(t *testing.T) {
 	env := newTestEnv(t)
 	r := myhttp.Router(env.h)
 
-	req := httptest.NewRequest(http.MethodGet, "/stats/abc", nil)
+	// Create a link, then seed click rows directly in ClickHouse so we
+	// control the hour distribution without relying on the async worker.
+	created := createViaHandler(t, r, "https://example.org/stats-test", "")
+
+	base := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Hour)
+	events := []ch.ClickEvent{
+		{ShortCode: created.ShortCode, Timestamp: base.Add(5 * time.Minute)},
+		{ShortCode: created.ShortCode, Timestamp: base.Add(20 * time.Minute)},
+		{ShortCode: created.ShortCode, Timestamp: base.Add(70 * time.Minute)},
+	}
+	if err := env.ch.Insert(context.Background(), events); err != nil {
+		t.Fatalf("seed clicks: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/stats/"+created.ShortCode, nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotImplemented {
-		t.Errorf("status = %d, want 501", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200. body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		ShortCode string `json:"short_code"`
+		Total     uint64 `json:"total"`
+		Hourly    []struct {
+			Hour  time.Time `json:"hour"`
+			Count uint64    `json:"count"`
+		} `json:"hourly"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ShortCode != created.ShortCode {
+		t.Errorf("ShortCode = %q, want %q", resp.ShortCode, created.ShortCode)
+	}
+	if resp.Total != 3 {
+		t.Errorf("Total = %d, want 3", resp.Total)
+	}
+	if len(resp.Hourly) != 2 {
+		t.Fatalf("Hourly buckets = %d, want 2. got %+v", len(resp.Hourly), resp.Hourly)
+	}
+	if resp.Hourly[0].Count != 2 || resp.Hourly[1].Count != 1 {
+		t.Errorf("bucket counts = %d,%d; want 2,1", resp.Hourly[0].Count, resp.Hourly[1].Count)
+	}
+}
+
+func TestStats_UnknownCodeReturnsZero(t *testing.T) {
+	// Unknown short_codes just return zeros — the handler doesn't validate
+	// against Postgres, which keeps it cheap. Documented tradeoff.
+	env := newTestEnv(t)
+	r := myhttp.Router(env.h)
+
+	code := fmt.Sprintf("nx%d", time.Now().UnixNano())
+	req := httptest.NewRequest(http.MethodGet, "/stats/"+code, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp struct {
+		Total uint64 `json:"total"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Total != 0 {
+		t.Errorf("Total = %d, want 0", resp.Total)
+	}
+}
+
+func TestStats_InvalidCodeReturns400(t *testing.T) {
+	env := newTestEnv(t)
+	r := myhttp.Router(env.h)
+
+	req := httptest.NewRequest(http.MethodGet, "/stats/bad!code", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
 
