@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/matt/url-shortener/internal/storage/postgres"
+	"github.com/mhockenbury/url-shortener/internal/storage/postgres"
 )
 
 // Integration tests. Skipped if DATABASE_URL (or the default DSN) isn't reachable.

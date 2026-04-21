@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/matt/url-shortener/internal/shortener"
+	"github.com/mhockenbury/url-shortener/internal/shortener"
 )
 
 // Integration tests hit a real Postgres brought up by docker-compose. They're

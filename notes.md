@@ -4,7 +4,7 @@ Subproject-local notes: decisions made during implementation, commands, referenc
 
 ## Decisions made during scaffolding
 
-- **Go module path:** `github.com/matt/url-shortener` — placeholder until the private GitHub repo is created; will be renamed then
+- **Go module path:** `github.com/mhockenbury/url-shortener`
 - **Migrations:** plain `.sql` files for now; `make migrate` not yet wired. Postgres migrations in `migrations/`, ClickHouse in `migrations/clickhouse/`. Will reach for goose only if we need down-migrations
 - **API + worker run on host** during dev; compose runs Postgres + Redis + ClickHouse. Dockerizing API/worker is deferred until benchmarking phase to avoid container overhead noise in measurements
 - **Redirect status code:** deferring 301 vs 302 decision to when analytics are wired — see `docs/tradeoffs.md`
