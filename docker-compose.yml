@@ -42,10 +42,13 @@ services:
     volumes:
       - chdata:/var/lib/clickhouse
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      # wget --spider against /ping is flaky on the alpine image; use the
+      # native client instead. Runs in-container so no extra tooling needed.
+      test: ["CMD", "clickhouse-client", "--user", "shortener", "--password", "shortener", "--query", "SELECT 1"]
       interval: 2s
-      timeout: 2s
+      timeout: 3s
       retries: 15
+      start_period: 10s
 
 volumes:
   pgdata:
