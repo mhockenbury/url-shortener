@@ -2,7 +2,7 @@
 # for targets invoking them. Matches the install locations from notes.md.
 export PATH := $(PATH):/usr/local/go/bin:$(HOME)/go/bin
 
-.PHONY: up down migrate migrate-postgres migrate-clickhouse run-api run-worker test tidy build fmt openapi openapi-check openapi-tools load-redirect-hit
+.PHONY: up down migrate migrate-postgres migrate-clickhouse run-api run-worker test tidy build fmt openapi openapi-check openapi-tools load-redirect-hit load-redirect-cold
 
 # Compose services (postgres, redis, clickhouse) must be healthy before migrate.
 up:
@@ -87,3 +87,6 @@ openapi-tools:
 
 load-redirect-hit:
 	k6 run scripts/k6/01_redirect_cache_hit.js
+
+load-redirect-cold:
+	k6 run scripts/k6/02_redirect_cold_start.js
