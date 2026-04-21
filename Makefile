@@ -2,7 +2,7 @@
 # for targets invoking them. Matches the install locations from notes.md.
 export PATH := $(PATH):/usr/local/go/bin:$(HOME)/go/bin
 
-.PHONY: up down migrate migrate-postgres migrate-clickhouse run-api run-worker test tidy build fmt openapi openapi-check openapi-tools
+.PHONY: up down migrate migrate-postgres migrate-clickhouse run-api run-worker test tidy build fmt openapi openapi-check openapi-tools load-redirect-hit
 
 # Compose services (postgres, redis, clickhouse) must be healthy before migrate.
 up:
@@ -79,3 +79,11 @@ openapi-check: openapi
 # One-time install of the swag CLI. Installs into \$GOPATH/bin (usually ~/go/bin).
 openapi-tools:
 	go install github.com/swaggo/swag/cmd/swag@latest
+
+# --- Load tests (k6) ---
+# Scenarios live in scripts/k6/; see docs/benchmarks.md for what each measures.
+# Defaults target localhost:8080 against a running API binary; override BASE_URL
+# or per-scenario knobs (RPS, DURATION, POOL_SIZE) via env.
+
+load-redirect-hit:
+	k6 run scripts/k6/01_redirect_cache_hit.js
