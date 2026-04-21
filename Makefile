@@ -58,8 +58,12 @@ fmt:
 # docs/tradeoffs.md for the generator choice rationale.
 
 # Regenerate the spec. Run this after changing any handler or request/response type.
+# We delete the generated docs.go — it's a Go file that embeds the spec for
+# programs serving Swagger UI, which we don't do. Keeping it would pull the
+# swaggo/swag runtime into our module for no benefit.
 openapi:
 	swag init -g cmd/api/main.go --dir . --output docs/openapi --parseInternal --parseDependency=false
+	@rm -f docs/openapi/docs.go
 
 # Drift check: regenerate and fail if the result differs from HEAD. Meant for
 # CI and pre-push hooks so nobody merges code whose committed spec is stale.
