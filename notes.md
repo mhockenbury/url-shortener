@@ -22,6 +22,7 @@ Subproject-local notes: decisions made during implementation, commands, referenc
 - **Integration tests hit real Postgres + Redis via docker-compose.** Skip cleanly when unreachable (env-based DSN/addr with sensible defaults). Per matt's feedback memory: no mocked DBs.
 - **Per-test allocator-row naming uses `time.Now().UnixNano()` for both the name and the starting `next_id`** so parallel runs on a shared `links` table don't collide with leftover rows from prior runs.
 - **`go run` swallows signals.** Graceful-shutdown testing must use the compiled binary (`./bin/api`) — `go run ./cmd/api` + `kill -TERM` exits the child ungracefully. Worth remembering across Go subprojects.
+- **Dev loop via `make up-app` / `down-app`.** Background processes via `nohup` + PID files under `run/` (gitignored). Preserves the graceful-shutdown path we built. Kept out of docker-compose on purpose — running the binaries on the host avoids container-network overhead that would distort benchmarks. Revisit when we decide to dockerize (currently deferred until post-benchmarks).
 
 ## Open questions (subproject-local)
 
@@ -42,12 +43,21 @@ make migrate              # both stores
 make migrate-postgres     # just Postgres
 make migrate-clickhouse   # just ClickHouse
 
-# Run the API (compiled binary — needed for graceful shutdown to work)
-go build -o bin/api ./cmd/api && ./bin/api
+# Full dev loop — compose deps + api + worker in one shot
+make up-all        # starts postgres/redis/clickhouse, waits for healthy, builds + starts app
+make down-all      # stops app then stops (preserves) compose containers
 
-# Or dev loop via Makefile (note: `go run` does not forward SIGTERM cleanly)
-make run-api       # api on :8080
-make run-worker    # worker (not yet implemented)
+# Granular control
+make up-app        # build + start api & worker in background (requires compose deps healthy)
+make down-app      # SIGTERM both; wait up to 15s; SIGKILL if stuck
+make restart-app   # down-app + up-app
+make status-app    # pid + log path for each
+make logs-api      # tail -f run/api.log
+make logs-worker   # tail -f run/worker.log
+
+# Foreground (useful for interactive debugging; go run swallows SIGTERM though)
+make run-api
+make run-worker
 
 # Full test suite (skips integration tests if deps unreachable)
 go test ./...
