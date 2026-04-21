@@ -12,6 +12,7 @@ The four core decisions live in the README §6. This doc is where we capture add
 - ClickHouse insert batch size: 1000 rows / 1s is the starting heuristic. ClickHouse prefers larger batches (10k+) for best compression and merge behavior — revisit after first benchmark pass. Trade-off is batch size vs end-to-end analytics latency.
 - ClickHouse: raw `MergeTree` vs `ReplacingMergeTree` for dedup. Chose raw — at-least-once dupes accepted as overcount. Revisit if stats accuracy becomes a requirement.
 - ClickHouse: when to add a materialized view for hourly rollups. Not needed at current scale; noted as a V2 lever if `GET /stats/:code` latency becomes a problem.
+- **Expiry enforcement location.** Currently pushed to the HTTP handler (compare `ExpiresAt` to `now()`, return 410). Alternative: enforce in SQL (`WHERE expires_at IS NULL OR expires_at > now()`). Tradeoff: handler-side lets the cache serve briefly-stale-expired rows without extra invalidation machinery, and puts all 410-vs-301 logic in one place. SQL-side makes the contract explicit at the storage boundary and avoids ever returning an expired `Link` to callers. Revisit once the cache layer exists and we can reason about the full invalidation story.
 
 ## Resolved
 
